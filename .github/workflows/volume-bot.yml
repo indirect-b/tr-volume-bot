@@ -53,10 +53,10 @@ jobs:
           CHAT_ID: ${{ secrets.CHAT_ID }}
           LCW_API_KEY: ${{ secrets.LCW_API_KEY }}
         run: python bot.py
-      - name: Save subscriber list
+      - name: Save subscriber list and inbox
         run: |
           git config user.name "tr-volume-bot"
           git config user.email "tr-volume-bot@indirect-b.is-a.dev"
-          git add subscribers.json
-          git diff --cached --quiet || git commit -m "Update subscribers"
+          git add subscribers.json inbox.json
+          git diff --cached --quiet || git commit -m "Update subscribers and inbox"
           git push
