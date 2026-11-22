@@ -4,12 +4,21 @@
 #   1. Create a repo (public = unlimited free minutes; private also fits:
 #      this bot uses ~360 min/month of the 2,000 free minutes).
 #      Suggested name: tr-volume-bot
-#   2. Upload bot.py + requirements.txt + this .github folder.
+#   2. Upload bot.py + requirements.txt + subscribers.json + this .github
+#      folder.
 #   3. Repo -> Settings -> Secrets and variables -> Actions -> New secret:
-#        BOT_TOKEN = the bot token from BotFather (paste ONLY here, never in
-#                    chat or in a file)
-#        CHAT_ID   = Tr's chat id (see README.md for how to find it)
+#        BOT_TOKEN   = the bot token from BotFather (paste ONLY here, never
+#                      in chat or in a file)
+#        LCW_API_KEY = a free Live Coin Watch API key (paste ONLY here)
+#        CHAT_ID     = optional seed chat (subscribed even without /start)
 #   4. Actions tab -> "Tr volume bot" -> Run workflow (test run).
+#
+# How it works: anyone who /starts the bot in Telegram gets the digest.
+# Each run polls getUpdates for new /start commands, adds those chats to
+# subscribers.json, sends the digest to every subscriber, and commits the
+# updated list back. The bot has NO webhook (deleteWebhook) — a webhook
+# would swallow the /start updates, so getUpdates would see nothing.
+# A chat that blocks the bot is dropped from the list automatically.
 #
 # Notes:
 # - Cron runs in UTC: '0 */2 * * *' = 03:30, 05:30, ... Tehran time.
@@ -44,3 +53,10 @@ jobs:
           CHAT_ID: ${{ secrets.CHAT_ID }}
           LCW_API_KEY: ${{ secrets.LCW_API_KEY }}
         run: python bot.py
+      - name: Save subscriber list
+        run: |
+          git config user.name "tr-volume-bot"
+          git config user.email "tr-volume-bot@indirect-b.is-a.dev"
+          git add subscribers.json
+          git diff --cached --quiet || git commit -m "Update subscribers"
+          git push
