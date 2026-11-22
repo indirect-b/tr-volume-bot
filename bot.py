@@ -9,9 +9,15 @@ Filter: only coins with 24h volume of at least 500 BTC are considered.
 The digest is in ENGLISH and laid out as clean monospace TABLES, with
 three sections, all from that filtered set:
   1. top 10 coins by 24h trading volume,
-  2. top 5 gainers by 24h price change,
-  3. top 5 losers by 24h price change.
+  2. top 5 gainers by 1h price change,
+  3. top 5 losers by 1h price change.
 Each coin shows its 24h volume and its price, both in BTC.
+
+Exclusions (Tr's method, 2026-11-22): BTC, ETH, gold-backed tokens
+and ALL stablecoins are never listed. Gainers/losers use the 1h
+change (the site's 1h view), not the 24h change. A coin whose 1h
+rise is extreme (a single-candle vertical pump) is left out of the
+gainers — see SINGLE_CANDLE_1H_PCT.
 
 Anyone who /starts the bot in Telegram receives the digest — there is
 no fixed recipient list. Each run reads new /start updates (long
@@ -65,6 +71,24 @@ MIN_VOLUME_BTC = 500
 # filter still leaves enough candidates for the gainers/losers lists.
 FETCH_LIMIT = 50
 
+# Never list these (Tr's method): the big coins, gold-backed tokens,
+# and every stablecoin. This replaces the earlier "do not exclude
+# stablecoins" setting — Tr explicitly asked for the exclusion.
+EXCLUDE_CODES = {
+    # Big coins
+    "BTC", "ETH",
+    # Gold-backed tokens
+    "PAXG", "XAUT",
+    # Stablecoins
+    "USDT", "USDC", "DAI", "USDE", "FDUSD", "TUSD", "USDP", "USD1",
+    "PYUSD", "USDD", "USTC", "GUSD", "EURC", "EURS", "BUSD", "UST",
+    "SUSD", "FRAX", "LUSD", "MIM", "USDJ", "DAI2",
+}
+
+# A 1h rise above this is treated as a single-candle vertical pump
+# ("خیلی صاف و با تک کندل بالا اومدن") and left out of the gainers.
+SINGLE_CANDLE_1H_PCT = 0.50
+
 # Monospace table column widths (Telegram renders ``` blocks monospace).
 COIN_W = 20
 VOL_W = 12
@@ -111,6 +135,13 @@ def day_change(c):
     """24h price change as a decimal fraction, or None if LCW gave none."""
     d = c.get("delta") or {}
     v = d.get("day")
+    return v if isinstance(v, (int, float)) else None
+
+
+def hour_change(c):
+    """1h price change as a decimal fraction, or None if LCW gave none."""
+    d = c.get("delta") or {}
+    v = d.get("hour")
     return v if isinstance(v, (int, float)) else None
 
 
@@ -185,15 +216,32 @@ def table_row(i, c, change=None):
 def build_message(coins):
     tehran = timezone(timedelta(hours=3, minutes=30))
     now = datetime.now(tehran).strftime("%d %b %Y — %H:%M")
-    # Filter: only coins with 24h volume >= 500 BTC (the screenshot filter).
-    eligible = [c for c in coins if (c.get("volume") or 0) >= MIN_VOLUME_BTC]
+    # Filter: only coins with 24h volume >= 500 BTC (the screenshot filter),
+    # excluding BTC, ETH, gold-backed tokens and all stablecoins (Tr's method).
+    eligible = [
+        c for c in coins
+        if (c.get("volume") or 0) >= MIN_VOLUME_BTC
+        and c.get("code") not in EXCLUDE_CODES
+    ]
     top10 = eligible[:10]
-    with_change = [c for c in eligible if day_change(c) is not None]
-    gainers = sorted(with_change, key=lambda c: day_change(c), reverse=True)[:5]
-    losers = sorted(with_change, key=lambda c: day_change(c))[:5]
+    # Gainers/losers use the 1h change (the site's 1h view). A coin whose
+    # 1h rise is extreme is a single-candle vertical pump — leave it out
+    # of the gainers. Only rising coins count as gainers, only falling
+    # coins as losers (a list shorter than 5 is honest, not padded).
+    with_change = [c for c in eligible if hour_change(c) is not None]
+    gainers = sorted(
+        (c for c in with_change
+         if 0 < hour_change(c) <= SINGLE_CANDLE_1H_PCT),
+        key=lambda c: hour_change(c), reverse=True,
+    )[:5]
+    losers = sorted(
+        (c for c in with_change if hour_change(c) < 0),
+        key=lambda c: hour_change(c),
+    )[:5]
 
     lines = [
         "📊 24H Trading Volume — Filter: Volume ≥ 500 BTC",
+        "🚫 Excl. BTC, ETH, gold & all stablecoins",
         f"🕐 {now} Tehran Time",
         "",
         "🔝 Top 10 by Volume",
@@ -204,18 +252,18 @@ def build_message(coins):
         lines.append(table_row(i, c))
     lines.append("```")
     lines.append("")
-    lines.append("📈 Top 5 Gainers (24h)")
+    lines.append("📈 Top 5 Gainers (1h)")
     lines.append("```")
     lines.append(table_header(with_change=True))
     for i, c in enumerate(gainers, 1):
-        lines.append(table_row(i, c, day_change(c)))
+        lines.append(table_row(i, c, hour_change(c)))
     lines.append("```")
     lines.append("")
-    lines.append("📉 Top 5 Losers (24h)")
+    lines.append("📉 Top 5 Losers (1h)")
     lines.append("```")
     lines.append(table_header(with_change=True))
     for i, c in enumerate(losers, 1):
-        lines.append(table_row(i, c, day_change(c)))
+        lines.append(table_row(i, c, hour_change(c)))
     lines.append("```")
     lines.append("")
     lines.append("Source: Live Coin Watch")
