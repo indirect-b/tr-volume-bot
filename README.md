@@ -1,8 +1,10 @@
 # Tr volume bot — free external hosting
 
 A Telegram bot that sends the top 10 coins by 24h trading volume every
-2 hours. It fetches from the CoinGecko public API (no key) and sends via
-the Telegram Bot API. Message is in Persian, date is Jalali (Tehran time).
+2 hours. It fetches from the Live Coin Watch API (free key, 10,000
+requests/day, no card) and sends via the Telegram Bot API. All figures
+are denominated in **Bitcoin, not dollars** — 24h volume and price are
+both in BTC. Message is in Persian, date is Jalali (Tehran time).
 
 ## Recommended host: GitHub Actions (free, no card, no server)
 
@@ -11,7 +13,7 @@ script, and GitHub Actions runs it on a schedule with **no credit card,
 no sleep, no cold start**. A public repo gets **unlimited free minutes**;
 a private repo gets 2,000 min/month free — this bot uses ~360 min/month
 (12 runs/day × ~1 min). Outbound internet is unrestricted, so both
-`api.telegram.org` and `api.coingecko.com` work.
+`api.telegram.org` and `api.livecoinwatch.com` work.
 
 Limits to know:
 - Cron runs in UTC and GitHub may delay a scheduled run by a few minutes
@@ -45,6 +47,10 @@ Limits to know:
    - Name `BOT_TOKEN`, value = the token BotFather gave (paste it ONLY
      here — never in chat, never in a file, never in the code).
    - Name `CHAT_ID`, value = Tr's chat id from step 4 (just the number).
+   - Name `LCW_API_KEY`, value = a free Live Coin Watch API key —
+     generate it at livecoinwatch.com (sign in → profile page → API
+     key). Free tier is 10,000 requests/day, no card; this bot uses
+     12/day. Paste it ONLY here — never in chat, never in a file.
 6. **Test run** — Actions tab → "Tr volume bot" → Run workflow → watch
    it go green. Tr should receive the first digest within a minute.
 7. Done. From then on it sends by itself every 2 hours; nobody has to
@@ -54,7 +60,7 @@ Limits to know:
 
 | File | What it is |
 |---|---|
-| `bot.py` | The bot. Env vars `BOT_TOKEN` + `CHAT_ID`; `--dry-run` prints the message, `--get-chat-id` lists chats. No token is ever printed or logged. |
+| `bot.py` | The bot. Env vars `BOT_TOKEN` + `CHAT_ID` + `LCW_API_KEY`; `--dry-run` prints the message, `--get-chat-id` lists chats. No token or key is ever printed or logged. |
 | `requirements.txt` | `jdatetime` (Persian date; falls back to Gregorian if missing). |
 | `.github/workflows/volume-bot.yml` | Runs `bot.py` every 2 hours + manual run button. |
 | `.github/workflows/keep-alive.yml` | Monthly heartbeat commit so GitHub never pauses the schedule. |
@@ -77,7 +83,10 @@ Limits to know:
 - Actions tab → the failed run → read the log. Common causes: wrong
   `BOT_TOKEN` (Telegram says "Unauthorized" — re-paste the token from
   BotFather), wrong `CHAT_ID` (Telegram says "chat not found" — Tr has
-  not /started the bot, or the id is mistyped), CoinGecko 429 (rate
-  limit — the next run 2 hours later fixes itself).
+  not /started the bot, or the id is mistyped), missing/wrong
+  `LCW_API_KEY` ("LCW_API_KEY is not set" or Live Coin Watch 401 —
+  generate a free key at livecoinwatch.com and re-paste it into the
+  secret), Live Coin Watch 429 (rate limit — the next run 2 hours
+  later fixes itself).
 - Rotating the token: BotFather → /revoke → paste the NEW token into
   the `BOT_TOKEN` secret again. Never paste tokens in chat.
