@@ -1,10 +1,16 @@
 #!/usr/bin/env python3
 """Tr's coin-volume bot — standalone deployable version.
 
-Sends the top 10 coins by 24h trading volume every 2 hours, from the
-Live Coin Watch API (the same data Tr sees on livecoinwatch.com).
-All figures are denominated in BITCOIN, not dollars: 24h volume and
-price are both in BTC (the ranking itself is by 24h volume).
+Sends a digest every 2 hours, from the Live Coin Watch API (the same
+data Tr sees on livecoinwatch.com). All figures are denominated in
+BITCOIN, not dollars: 24h volume and price are both in BTC.
+
+Filter: only coins with 24h volume of at least 500 BTC are considered.
+The digest has three sections, all from that filtered set:
+  1. top 10 coins by 24h trading volume,
+  2. top 5 gainers by 24h price change,
+  3. top 5 losers by 24h price change.
+Each coin shows its 24h volume and its price, both in BTC.
 
 Anyone who /starts the bot in Telegram receives the digest — there is
 no fixed recipient list. Each run reads new /start updates (long
@@ -47,6 +53,12 @@ from datetime import datetime, timezone, timedelta
 
 LCW_API_URL = "https://api.livecoinwatch.com/coins/list"
 
+# Only coins with at least this much 24h volume (in BTC) are considered.
+MIN_VOLUME_BTC = 500
+# How many coins to fetch from LCW (sorted by volume desc) so the
+# filter still leaves enough candidates for the gainers/losers lists.
+FETCH_LIMIT = 50
+
 FA_NAMES = {
     "Bitcoin": "بیت‌کوین", "Ethereum": "اتریوم", "Tether": "تتر",
     "Solana": "سولانا", "XRP": "ریپل", "USDC": "یواس‌دی‌سی",
@@ -75,7 +87,19 @@ def fmt_price_btc(p):
     return f"{p:,.8f} BTC"
 
 
-def fetch_top10():
+def fmt_pct(x):
+    """A decimal fraction (0.05 = +5%) as a signed percent, e.g. +5.23%."""
+    return f"{x * 100:+.2f}%"
+
+
+def day_change(c):
+    """24h price change as a decimal fraction, or None if LCW gave none."""
+    d = c.get("delta") or {}
+    v = d.get("day")
+    return v if isinstance(v, (int, float)) else None
+
+
+def fetch_coins():
     api_key = os.environ.get("LCW_API_KEY", "").strip()
     if not api_key:
         raise RuntimeError(
@@ -87,7 +111,7 @@ def fetch_top10():
         "sort": "volume",
         "order": "descending",
         "offset": 0,
-        "limit": 10,
+        "limit": FETCH_LIMIT,
         "meta": True,
     }).encode()
     req = urllib.request.Request(
@@ -117,13 +141,37 @@ def build_message(coins):
         now = jdatetime.datetime.now(tehran).strftime("%d %B %Y — %H:%M")
     except ImportError:
         now = datetime.now(tehran).strftime("%d %b %Y — %H:%M")
-    lines = ["📊 حجم معاملات ۲۴ ساعته — ۱۰ کوین برتر", f"🕐 {now} به وقت تهران", ""]
-    for i, c in enumerate(coins, 1):
+    # Filter: only coins with 24h volume >= 500 BTC (the screenshot filter).
+    eligible = [c for c in coins if (c.get("volume") or 0) >= MIN_VOLUME_BTC]
+    top10 = eligible[:10]
+    with_change = [c for c in eligible if day_change(c) is not None]
+    gainers = sorted(with_change, key=lambda c: day_change(c), reverse=True)[:5]
+    losers = sorted(with_change, key=lambda c: day_change(c))[:5]
+
+    def coin_line(i, c, extra=""):
         name = c.get("name") or c["code"]
         fa = FA_NAMES.get(name, name)
-        lines.append(
-            f"{i}. {fa} ({c['code']}) — حجم {fmt_volume_btc(c['volume'])} — قیمت {fmt_price_btc(c['rate'])}"
+        return (
+            f"{i}. {fa} ({c['code']}){extra} — حجم "
+            f"{fmt_volume_btc(c['volume'])} — قیمت {fmt_price_btc(c['rate'])}"
         )
+
+    lines = [
+        "📊 حجم معاملات ۲۴ ساعته — فیلتر: حجم ≥ ۵۰۰ BTC",
+        f"🕐 {now} به وقت تهران",
+        "",
+        "🔝 ۱۰ کوین برتر بر اساس حجم",
+    ]
+    for i, c in enumerate(top10, 1):
+        lines.append(coin_line(i, c))
+    lines.append("")
+    lines.append("📈 ۵ سود برتر (تغییر ۲۴ ساعته)")
+    for i, c in enumerate(gainers, 1):
+        lines.append(coin_line(i, c, f" — {fmt_pct(day_change(c))}"))
+    lines.append("")
+    lines.append("📉 ۵ ضرر برتر (تغییر ۲۴ ساعته)")
+    for i, c in enumerate(losers, 1):
+        lines.append(coin_line(i, c, f" — {fmt_pct(day_change(c))}"))
     lines.append("")
     lines.append("منبع: Live Coin Watch")
     return "\n".join(lines)
@@ -264,7 +312,7 @@ def send_to_all(token, text, chats):
 def main(argv):
     if "--dry-run" in argv:
         try:
-            coins = fetch_top10()
+            coins = fetch_coins()
         except Exception as e:
             print(f"fetch failed: {e}", file=sys.stderr)
             return 1
@@ -285,7 +333,7 @@ def main(argv):
         save_state(state)
         return 0
     try:
-        coins = fetch_top10()
+        coins = fetch_coins()
     except Exception as e:
         print(f"fetch failed: {e}", file=sys.stderr)
         return 1
