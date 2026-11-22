@@ -42,4 +42,5 @@ jobs:
         env:
           BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
           CHAT_ID: ${{ secrets.CHAT_ID }}
+          LCW_API_KEY: ${{ secrets.LCW_API_KEY }}
         run: python bot.py
