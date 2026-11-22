@@ -1,0 +1,45 @@
+# Tr volume bot — runs every 2 hours, free, on GitHub Actions.
+#
+# Setup (the user does this once, in the GitHub web UI):
+#   1. Create a repo (public = unlimited free minutes; private also fits:
+#      this bot uses ~360 min/month of the 2,000 free minutes).
+#      Suggested name: tr-volume-bot
+#   2. Upload bot.py + requirements.txt + this .github folder.
+#   3. Repo -> Settings -> Secrets and variables -> Actions -> New secret:
+#        BOT_TOKEN = the bot token from BotFather (paste ONLY here, never in
+#                    chat or in a file)
+#        CHAT_ID   = Tr's chat id (see README.md for how to find it)
+#   4. Actions tab -> "Tr volume bot" -> Run workflow (test run).
+#
+# Notes:
+# - Cron runs in UTC: '0 */2 * * *' = 03:30, 05:30, ... Tehran time.
+# - GitHub may delay a scheduled run by a few minutes under load; for a
+#   2-hourly digest that does not matter.
+# - GitHub disables scheduled workflows after 60 days with no repo
+#   activity; keep-alive.yml makes one trivial commit a month so the
+#   schedule never pauses.
+# - Secrets are encrypted and GitHub masks them in logs automatically.
+
+name: Tr volume bot
+
+on:
+  schedule:
+    - cron: '0 */2 * * *'   # every 2 hours
+  workflow_dispatch:        # manual "Run workflow" button
+
+jobs:
+  send:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Send volume digest
+        env:
+          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+          CHAT_ID: ${{ secrets.CHAT_ID }}
+        run: python bot.py

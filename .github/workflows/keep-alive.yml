@@ -1,0 +1,29 @@
+# Keep-alive: GitHub disables scheduled workflows after 60 days with no
+# repo activity. This tiny monthly commit keeps the repo "active" so the
+# 2-hourly schedule in volume-bot.yml never pauses. It touches only a
+# timestamp file; it never touches the bot or the secrets.
+
+name: Keep-alive
+
+on:
+  schedule:
+    - cron: '0 0 1 * *'   # 1st of every month
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  keep-alive:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Touch timestamp
+        run: date -u +"%Y-%m-%d %H:%M UTC" > .keep-alive
+      - name: Commit if changed
+        run: |
+          git config user.name "tr-volume-bot"
+          git config user.email "tr-volume-bot@users.noreply.github.com"
+          git add .keep-alive
+          git diff --cached --quiet || git commit -m "keep-alive: monthly heartbeat"
+          git push
