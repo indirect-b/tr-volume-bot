@@ -6,25 +6,36 @@ Live Coin Watch API (the same data Tr sees on livecoinwatch.com).
 All figures are denominated in BITCOIN, not dollars: 24h volume and
 price are both in BTC (the ranking itself is by 24h volume).
 
+Anyone who /starts the bot in Telegram receives the digest — there is
+no fixed recipient list. Each run reads new /start updates (long
+polling, no webhook), adds those chats to subscribers.json, sends the
+digest to every subscriber, and commits the updated list back to the
+repo. A chat that blocks the bot (or is deleted) is removed from the
+list automatically.
+
 Runs on any host that can run a Python script on a schedule (recommended:
 GitHub Actions, see .github/workflows/volume-bot.yml). Reads everything
 from environment variables — no token, chat id or API key is ever stored
 in a file:
 
   BOT_TOKEN    Telegram bot token from BotFather (digits + ':' + ~35 chars)
-  CHAT_ID      Telegram chat id of the person who should receive the message
   LCW_API_KEY  Live Coin Watch API key (free: 10,000 req/day, no card —
                generate it at your livecoinwatch.com profile page)
+  CHAT_ID      Optional seed: a chat id subscribed even if it never
+               /started the bot (used only when subscribers.json is
+               missing or empty)
+  SUBSCRIBERS_FILE  Path of the subscriber state file
+               (default: subscribers.json next to this script)
 
 Usage:
-  python bot.py                  # fetch + send to CHAT_ID
+  python bot.py                  # poll starters + send to all subscribers
   python bot.py --dry-run        # fetch + print the message, send nothing
-  python bot.py --get-chat-id    # list chats from getUpdates (find Tr's id)
+  python bot.py --get-chat-id    # list chats from getUpdates (find a chat id)
 
-Tr must /start the bot in Telegram BEFORE his chat id appears in
-getUpdates. The bot only sends messages; it never reads anyone's chats.
-The token and API key are never printed or logged — errors show only
-the provider's own error description, never the request URL or key.
+The bot only sends messages; it never reads anyone's chats beyond the
+/start updates it needs to know who subscribed. The token and API key
+are never printed or logged — errors show only the provider's own error
+description, never the request URL or key.
 """
 import json
 import os
@@ -149,11 +160,105 @@ def get_chat_ids(token):
         if chat.get("id") is not None:
             seen[chat["id"]] = chat.get("username") or chat.get("title") or chat.get("first_name") or "?"
     if not seen:
-        print("no chats found — Tr must /start the bot in Telegram first")
+        print("no chats found — someone must /start the bot in Telegram first")
         return 1
     for chat_id, name in seen.items():
         print(f"{name}: {chat_id}")
     return 0
+
+
+def state_path():
+    return os.environ.get(
+        "SUBSCRIBERS_FILE",
+        os.path.join(os.path.dirname(os.path.abspath(__file__)), "subscribers.json"),
+    )
+
+
+def load_state():
+    """{'offset': int, 'chats': [int, ...]} — seed from CHAT_ID if empty."""
+    path = state_path()
+    state = {"offset": 0, "chats": []}
+    try:
+        with open(path, encoding="utf-8") as f:
+            saved = json.load(f)
+        state["offset"] = int(saved.get("offset", 0))
+        state["chats"] = [int(c) for c in saved.get("chats", [])]
+    except (OSError, ValueError, TypeError):
+        pass
+    seed = os.environ.get("CHAT_ID", "").strip()
+    if seed and not state["chats"]:
+        try:
+            state["chats"] = [int(seed)]
+        except ValueError:
+            pass
+    return state
+
+
+def save_state(state):
+    path = state_path()
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(state, f, ensure_ascii=False, indent=2)
+        f.write("\n")
+    os.replace(tmp, path)
+
+
+def poll_new_subscribers(token, state):
+    """Read /start updates, add private chats to state, advance offset.
+
+    Returns the number of newly added chats. Only /start in a private
+    chat subscribes. A 'kicked' my_chat_member update unsubscribes.
+    """
+    try:
+        data = telegram_get(token, "getUpdates", {"offset": state["offset"], "timeout": 0})
+    except RuntimeError as e:
+        print(str(e), file=sys.stderr)
+        return -1
+    added = 0
+    for update in data.get("result", []):
+        state["offset"] = max(state["offset"], int(update.get("update_id", 0)) + 1)
+        msg = update.get("message") or {}
+        chat = msg.get("chat", {})
+        text = (msg.get("text") or "")
+        if (
+            chat.get("type") == "private"
+            and text.startswith("/start")
+            and chat.get("id") is not None
+            and int(chat["id"]) not in state["chats"]
+        ):
+            state["chats"].append(int(chat["id"]))
+            added += 1
+        member = update.get("my_chat_member") or {}
+        if member.get("new_chat_member", {}).get("status") == "kicked":
+            cid = (member.get("chat") or {}).get("id")
+            if cid is not None and int(cid) in state["chats"]:
+                state["chats"].remove(int(cid))
+    return added
+
+
+def send_to_all(token, text, chats):
+    """Send to every chat; drop blocked / deleted chats. Returns (sent, failed, dropped)."""
+    sent = failed = 0
+    dropped = []
+    for chat_id in list(chats):
+        try:
+            result = telegram_get(token, "sendMessage", {"chat_id": chat_id, "text": text})
+            if result.get("ok"):
+                sent += 1
+            else:
+                failed += 1
+                print(f"send to {chat_id} failed: {result.get('description', result)}", file=sys.stderr)
+        except RuntimeError as e:
+            msg = str(e)
+            if "blocked" in msg or "chat not found" in msg:
+                dropped.append(chat_id)
+                print(f"dropping {chat_id}: {msg}", file=sys.stderr)
+            else:
+                failed += 1
+                print(f"send to {chat_id} failed: {msg}", file=sys.stderr)
+    for chat_id in dropped:
+        chats.remove(chat_id)
+    return sent, failed, dropped
 
 
 def main(argv):
@@ -171,26 +276,24 @@ def main(argv):
         return 2
     if "--get-chat-id" in argv:
         return get_chat_ids(token)
+    state = load_state()
+    added = poll_new_subscribers(token, state)
+    if added < 0:
+        return 1
+    if not state["chats"]:
+        print("no subscribers yet — someone must /start the bot first", file=sys.stderr)
+        save_state(state)
+        return 0
     try:
         coins = fetch_top10()
     except Exception as e:
         print(f"fetch failed: {e}", file=sys.stderr)
         return 1
     text = build_message(coins)
-    chat_id = os.environ.get("CHAT_ID", "").strip()
-    if not chat_id:
-        print("CHAT_ID is not set — run with --get-chat-id to find Tr's chat id", file=sys.stderr)
-        return 2
-    try:
-        result = telegram_get(token, "sendMessage", {"chat_id": chat_id, "text": text})
-    except RuntimeError as e:
-        print(str(e), file=sys.stderr)
-        return 1
-    if not result.get("ok"):
-        print(f"send failed: {result.get('description', result)}", file=sys.stderr)
-        return 1
-    print(f"sent to chat {chat_id}")
-    return 0
+    sent, failed, dropped = send_to_all(token, text, state["chats"])
+    save_state(state)
+    print(f"sent to {sent} chat(s), {failed} failed, {len(dropped)} dropped, {added} new subscriber(s)")
+    return 0 if failed == 0 else 1
 
 
 if __name__ == "__main__":

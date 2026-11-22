@@ -6,6 +6,14 @@ requests/day, no card) and sends via the Telegram Bot API. All figures
 are denominated in **Bitcoin, not dollars** — 24h volume and price are
 both in BTC. Message is in Persian, date is Jalali (Tehran time).
 
+**Anyone who /starts the bot receives the digest.** Each run polls
+Telegram for new /start commands, adds those chats to
+`subscribers.json`, sends the digest to every subscriber, and commits
+the updated list back to the repo. A chat that blocks the bot is
+dropped automatically. The bot has **no webhook** — a webhook would
+swallow the /start updates, so the bot reads them with getUpdates
+instead.
+
 ## Recommended host: GitHub Actions (free, no card, no server)
 
 Why this one: the user already has GitHub, the bot is a plain Python
@@ -30,37 +38,40 @@ Limits to know:
 1. **Create the repo** on GitHub (github.com/new): name `tr-volume-bot`,
    Public, no README needed. (Private also works — still inside the free
    2,000 min/month.)
-2. **Upload the files**: `bot.py`, `requirements.txt`, and the whole
-   `.github` folder (both workflows). Upload via the web UI (Add file →
-   Upload files) or `git push` from the laptop.
-3. **Tr starts the bot first**: Tr opens the bot in Telegram and taps
-   START (sends `/start`). Without this, Telegram will not let the bot
-   message him. (The user already /started the bot himself — his own
-   chat is already in the bot's update list.)
-4. **Find Tr's chat id** — either:
-   - Run once locally: `BOT_TOKEN=<token> python bot.py --get-chat-id`
-     (prints every chat that /started the bot, `username: chat_id`), or
-   - Open in a browser: `https://api.telegram.org/bot<TOKEN>/getUpdates`
-     and find `"chat":{"id": <number>}` next to Tr's username.
-5. **Add the secrets** — repo → Settings → Secrets and variables →
+2. **Upload the files**: `bot.py`, `requirements.txt`,
+   `subscribers.json`, and the whole `.github` folder (both workflows).
+   Upload via the web UI (Add file → Upload files) or `git push` from
+   the laptop.
+3. **Anyone starts the bot**: whoever opens the bot in Telegram and
+   taps START (sends `/start`) is subscribed automatically — the next
+   run (within 2 hours) sends them the digest. No chat id needs to be
+   looked up by hand. (The user already /started the bot himself — his
+   chat is seeded in `subscribers.json`.)
+4. **Add the secrets** — repo → Settings → Secrets and variables →
    Actions → New repository secret:
    - Name `BOT_TOKEN`, value = the token BotFather gave (paste it ONLY
      here — never in chat, never in a file, never in the code).
-   - Name `CHAT_ID`, value = Tr's chat id from step 4 (just the number).
    - Name `LCW_API_KEY`, value = a free Live Coin Watch API key —
      generate it at livecoinwatch.com (sign in → profile page → API
      key). Free tier is 10,000 requests/day, no card; this bot uses
      12/day. Paste it ONLY here — never in chat, never in a file.
+   - Name `CHAT_ID`, optional: a chat id subscribed even if it never
+     /started the bot (used only when `subscribers.json` is missing or
+     empty).
 6. **Test run** — Actions tab → "Tr volume bot" → Run workflow → watch
-   it go green. Tr should receive the first digest within a minute.
-7. Done. From then on it sends by itself every 2 hours; nobody has to
-   message anyone.
+   it go green. Every subscriber should receive the first digest
+   within a minute.
+7. Done. From then on it sends by itself every 2 hours to everyone who
+   /started the bot; nobody has to message anyone. **Do NOT set a
+   webhook on this bot** (BotFather or any other service) — a webhook
+   swallows the /start updates and new subscribers stop being found.
 
 ## Files
 
 | File | What it is |
 |---|---|
-| `bot.py` | The bot. Env vars `BOT_TOKEN` + `CHAT_ID` + `LCW_API_KEY`; `--dry-run` prints the message, `--get-chat-id` lists chats. No token or key is ever printed or logged. |
+| `bot.py` | The bot. Env vars `BOT_TOKEN` + `LCW_API_KEY` (+ optional `CHAT_ID` seed); `--dry-run` prints the message, `--get-chat-id` lists chats. Polls /start updates, sends to all subscribers in `subscribers.json`, drops blocked chats. No token or key is ever printed or logged. |
+| `subscribers.json` | `{"offset": N, "chats": [...]}` — the subscriber list + the getUpdates offset. Updated and committed by every workflow run. |
 | `requirements.txt` | `jdatetime` (Persian date; falls back to Gregorian if missing). |
 | `.github/workflows/volume-bot.yml` | Runs `bot.py` every 2 hours + manual run button. |
 | `.github/workflows/keep-alive.yml` | Monthly heartbeat commit so GitHub never pauses the schedule. |
@@ -82,11 +93,12 @@ Limits to know:
 
 - Actions tab → the failed run → read the log. Common causes: wrong
   `BOT_TOKEN` (Telegram says "Unauthorized" — re-paste the token from
-  BotFather), wrong `CHAT_ID` (Telegram says "chat not found" — Tr has
-  not /started the bot, or the id is mistyped), missing/wrong
-  `LCW_API_KEY` ("LCW_API_KEY is not set" or Live Coin Watch 401 —
-  generate a free key at livecoinwatch.com and re-paste it into the
-  secret), Live Coin Watch 429 (rate limit — the next run 2 hours
-  later fixes itself).
+  BotFather), missing/wrong `LCW_API_KEY` ("LCW_API_KEY is not set" or
+  Live Coin Watch 401 — generate a free key at livecoinwatch.com and
+  re-paste it into the secret), Live Coin Watch 429 (rate limit — the
+  next run 2 hours later fixes itself), "can't use getUpdates while
+  webhook is active" (someone set a webhook on the bot again — delete
+  it with deleteWebhook so the bot can read /start updates), "no
+  subscribers yet" (nobody /started the bot and no CHAT_ID seed).
 - Rotating the token: BotFather → /revoke → paste the NEW token into
   the `BOT_TOKEN` secret again. Never paste tokens in chat.
