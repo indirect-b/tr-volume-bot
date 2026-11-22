@@ -18,7 +18,9 @@ no fixed recipient list. Each run reads new /start updates (long
 polling, no webhook), adds those chats to subscribers.json, sends the
 digest to every subscriber, and commits the updated list back to the
 repo. A chat that blocks the bot (or is deleted) is removed from the
-list automatically.
+list automatically. Any other text message a subscriber sends to the
+bot is saved to inbox.json (also committed back) so its request can
+be read and acted on.
 
 Runs on any host that can run a Python script on a schedule (recommended:
 GitHub Actions, see .github/workflows/volume-bot.yml). Reads everything
@@ -33,6 +35,9 @@ in a file:
                missing or empty)
   SUBSCRIBERS_FILE  Path of the subscriber state file
                (default: subscribers.json next to this script)
+  INBOX_FILE   Path of the inbox file where non-/start messages from
+               subscribers are saved (default: inbox.json next to
+               this script) so their requests can be read and acted on
 
 Usage:
   python bot.py                  # poll starters + send to all subscribers
@@ -262,6 +267,32 @@ def state_path():
     )
 
 
+def inbox_path():
+    return os.environ.get(
+        "INBOX_FILE",
+        os.path.join(os.path.dirname(os.path.abspath(__file__)), "inbox.json"),
+    )
+
+
+def load_inbox():
+    """List of received messages, newest last. Each entry: {chat_id, name, text, date}."""
+    try:
+        with open(inbox_path(), encoding="utf-8") as f:
+            saved = json.load(f)
+        return saved if isinstance(saved, list) else []
+    except (OSError, ValueError, TypeError):
+        return []
+
+
+def save_inbox(inbox):
+    path = inbox_path()
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(inbox, f, ensure_ascii=False, indent=2)
+        f.write("\n")
+    os.replace(tmp, path)
+
+
 def load_state():
     """{'offset': int, 'chats': [int, ...]} — seed from CHAT_ID if empty."""
     path = state_path()
@@ -291,11 +322,13 @@ def save_state(state):
     os.replace(tmp, path)
 
 
-def poll_new_subscribers(token, state):
+def poll_new_subscribers(token, state, inbox):
     """Read /start updates, add private chats to state, advance offset.
 
     Returns the number of newly added chats. Only /start in a private
     chat subscribes. A 'kicked' my_chat_member update unsubscribes.
+    Any other text message from a private chat is saved to the inbox
+    (with sender name, text and date) so its request can be read.
     """
     try:
         data = telegram_get(token, "getUpdates", {"offset": state["offset"], "timeout": 0})
@@ -308,14 +341,24 @@ def poll_new_subscribers(token, state):
         msg = update.get("message") or {}
         chat = msg.get("chat", {})
         text = (msg.get("text") or "")
-        if (
-            chat.get("type") == "private"
-            and text.startswith("/start")
-            and chat.get("id") is not None
-            and int(chat["id"]) not in state["chats"]
-        ):
-            state["chats"].append(int(chat["id"]))
-            added += 1
+        if chat.get("type") == "private" and chat.get("id") is not None:
+            if text.startswith("/start"):
+                if int(chat["id"]) not in state["chats"]:
+                    state["chats"].append(int(chat["id"]))
+                    added += 1
+            elif text.strip():
+                name = (
+                    chat.get("username")
+                    or chat.get("first_name")
+                    or chat.get("title")
+                    or str(chat["id"])
+                )
+                inbox.append({
+                    "chat_id": int(chat["id"]),
+                    "name": name,
+                    "text": text.strip(),
+                    "date": msg.get("date"),
+                })
         member = update.get("my_chat_member") or {}
         if member.get("new_chat_member", {}).get("status") == "kicked":
             cid = (member.get("chat") or {}).get("id")
@@ -370,9 +413,13 @@ def main(argv):
     if "--get-chat-id" in argv:
         return get_chat_ids(token)
     state = load_state()
-    added = poll_new_subscribers(token, state)
+    inbox = load_inbox()
+    inbox_before = len(inbox)
+    added = poll_new_subscribers(token, state, inbox)
     if added < 0:
         return 1
+    save_inbox(inbox)
+    print(f"inbox: {len(inbox) - inbox_before} new message(s), {len(inbox)} total")
     if not state["chats"]:
         print("no subscribers yet — someone must /start the bot first", file=sys.stderr)
         save_state(state)
