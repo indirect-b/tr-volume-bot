@@ -1,0 +1,17 @@
+# OPTIONAL ALTERNATIVE — Render Cron Job (NOT free).
+# Render cron jobs have no free instance type: minimum $1/month per job.
+# Only use this if the user prefers Render over GitHub Actions and accepts
+# the $1/month. Set BOT_TOKEN and CHAT_ID in the Render dashboard
+# (Environment tab) — never in this file.
+services:
+  - type: cron
+    name: tr-volume-bot
+    schedule: "0 */2 * * *"
+    env: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: python bot.py
+    envVars:
+      - key: BOT_TOKEN
+        sync: false
+      - key: CHAT_ID
+        sync: false

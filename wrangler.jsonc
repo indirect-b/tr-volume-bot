@@ -1,0 +1,1 @@
+{"$schema":"https://developers.cloudflare.com/workers/wrangler/configuration/","compatibility_date":"2026-11-22","main":"worker.js","name":"tr-volume-bot","triggers":{"crons":["0 */2 * * *"]}}
