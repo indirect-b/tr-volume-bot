@@ -6,7 +6,8 @@ data Tr sees on livecoinwatch.com). All figures are denominated in
 BITCOIN, not dollars: 24h volume and price are both in BTC.
 
 Filter: only coins with 24h volume of at least 500 BTC are considered.
-The digest has three sections, all from that filtered set:
+The digest is in ENGLISH and laid out as clean monospace TABLES, with
+three sections, all from that filtered set:
   1. top 10 coins by 24h trading volume,
   2. top 5 gainers by 24h price change,
   3. top 5 losers by 24h price change.
@@ -59,32 +60,41 @@ MIN_VOLUME_BTC = 500
 # filter still leaves enough candidates for the gainers/losers lists.
 FETCH_LIMIT = 50
 
-FA_NAMES = {
-    "Bitcoin": "بیت‌کوین", "Ethereum": "اتریوم", "Tether": "تتر",
-    "Solana": "سولانا", "XRP": "ریپل", "USDC": "یواس‌دی‌سی",
-    "Zcash": "زی‌کش", "Hyperliquid": "هایپرلیکویید",
-    "United Stables": "یونایتد استیبلز", "USD1": "یواس‌دی‌وان",
-}
+# Monospace table column widths (Telegram renders ``` blocks monospace).
+COIN_W = 20
+VOL_W = 12
+PRICE_W = 12
+CHG_W = 8
+
+
+def fmt_num(v):
+    """A BTC amount as a bare number (no unit — the column header says BTC)."""
+    if v >= 1e6:
+        return f"{v / 1e6:,.2f}M"
+    if v >= 1e3:
+        return f"{v:,.0f}"
+    if v >= 1:
+        return f"{v:,.2f}"
+    return f"{v:,.4f}"
+
+
+def fmt_price_num(p):
+    """A BTC price as a bare number (no unit — the column header says BTC)."""
+    if p >= 1:
+        return f"{p:,.4f}"
+    if p >= 0.1:
+        return f"{p:,.4f}"
+    if p >= 0.001:
+        return f"{p:,.6f}"
+    return f"{p:,.8f}"
 
 
 def fmt_volume_btc(v):
-    if v >= 1e6:
-        return f"{v / 1e6:,.2f}M BTC"
-    if v >= 1e3:
-        return f"{v:,.0f} BTC"
-    if v >= 1:
-        return f"{v:,.2f} BTC"
-    return f"{v:,.4f} BTC"
+    return fmt_num(v) + " BTC"
 
 
 def fmt_price_btc(p):
-    if p >= 1:
-        return f"{p:,.4f} BTC"
-    if p >= 0.1:
-        return f"{p:,.4f} BTC"
-    if p >= 0.001:
-        return f"{p:,.6f} BTC"
-    return f"{p:,.8f} BTC"
+    return fmt_price_num(p) + " BTC"
 
 
 def fmt_pct(x):
@@ -134,13 +144,42 @@ def fetch_coins():
         raise RuntimeError(f"Live Coin Watch request failed: {msg}")
 
 
+def coin_label(c):
+    """'Name (SYM)', truncated to the table column width."""
+    name = c.get("name") or c["code"]
+    label = f"{name} ({c['code']})"
+    return label[:COIN_W]
+
+
+def table_header(with_change):
+    if with_change:
+        head = (
+            f"{'#':>2}  {'Coin':<{COIN_W}}  {'Change':>{CHG_W}}  "
+            f"{'Volume (BTC)':>{VOL_W}}  {'Price (BTC)':>{PRICE_W}}"
+        )
+    else:
+        head = (
+            f"{'#':>2}  {'Coin':<{COIN_W}}  "
+            f"{'Volume (BTC)':>{VOL_W}}  {'Price (BTC)':>{PRICE_W}}"
+        )
+    return head + "\n" + "-" * len(head)
+
+
+def table_row(i, c, change=None):
+    if change is None:
+        return (
+            f"{i:>2}  {coin_label(c):<{COIN_W}}  "
+            f"{fmt_num(c['volume']):>{VOL_W}}  {fmt_price_num(c['rate']):>{PRICE_W}}"
+        )
+    return (
+        f"{i:>2}  {coin_label(c):<{COIN_W}}  {fmt_pct(change):>{CHG_W}}  "
+        f"{fmt_num(c['volume']):>{VOL_W}}  {fmt_price_num(c['rate']):>{PRICE_W}}"
+    )
+
+
 def build_message(coins):
     tehran = timezone(timedelta(hours=3, minutes=30))
-    try:
-        import jdatetime
-        now = jdatetime.datetime.now(tehran).strftime("%d %B %Y — %H:%M")
-    except ImportError:
-        now = datetime.now(tehran).strftime("%d %b %Y — %H:%M")
+    now = datetime.now(tehran).strftime("%d %b %Y — %H:%M")
     # Filter: only coins with 24h volume >= 500 BTC (the screenshot filter).
     eligible = [c for c in coins if (c.get("volume") or 0) >= MIN_VOLUME_BTC]
     top10 = eligible[:10]
@@ -148,32 +187,33 @@ def build_message(coins):
     gainers = sorted(with_change, key=lambda c: day_change(c), reverse=True)[:5]
     losers = sorted(with_change, key=lambda c: day_change(c))[:5]
 
-    def coin_line(i, c, extra=""):
-        name = c.get("name") or c["code"]
-        fa = FA_NAMES.get(name, name)
-        return (
-            f"{i}. {fa} ({c['code']}){extra} — حجم "
-            f"{fmt_volume_btc(c['volume'])} — قیمت {fmt_price_btc(c['rate'])}"
-        )
-
     lines = [
-        "📊 حجم معاملات ۲۴ ساعته — فیلتر: حجم ≥ ۵۰۰ BTC",
-        f"🕐 {now} به وقت تهران",
+        "📊 24H Trading Volume — Filter: Volume ≥ 500 BTC",
+        f"🕐 {now} Tehran Time",
         "",
-        "🔝 ۱۰ کوین برتر بر اساس حجم",
+        "🔝 Top 10 by Volume",
+        "```",
+        table_header(with_change=False),
     ]
     for i, c in enumerate(top10, 1):
-        lines.append(coin_line(i, c))
+        lines.append(table_row(i, c))
+    lines.append("```")
     lines.append("")
-    lines.append("📈 ۵ سود برتر (تغییر ۲۴ ساعته)")
+    lines.append("📈 Top 5 Gainers (24h)")
+    lines.append("```")
+    lines.append(table_header(with_change=True))
     for i, c in enumerate(gainers, 1):
-        lines.append(coin_line(i, c, f" — {fmt_pct(day_change(c))}"))
+        lines.append(table_row(i, c, day_change(c)))
+    lines.append("```")
     lines.append("")
-    lines.append("📉 ۵ ضرر برتر (تغییر ۲۴ ساعته)")
+    lines.append("📉 Top 5 Losers (24h)")
+    lines.append("```")
+    lines.append(table_header(with_change=True))
     for i, c in enumerate(losers, 1):
-        lines.append(coin_line(i, c, f" — {fmt_pct(day_change(c))}"))
+        lines.append(table_row(i, c, day_change(c)))
+    lines.append("```")
     lines.append("")
-    lines.append("منبع: Live Coin Watch")
+    lines.append("Source: Live Coin Watch")
     return "\n".join(lines)
 
 
@@ -290,7 +330,12 @@ def send_to_all(token, text, chats):
     dropped = []
     for chat_id in list(chats):
         try:
-            result = telegram_get(token, "sendMessage", {"chat_id": chat_id, "text": text})
+            result = telegram_get(token, "sendMessage", {
+                "chat_id": chat_id,
+                "text": text,
+                # Markdown (legacy) so the ``` monospace tables render.
+                "parse_mode": "Markdown",
+            })
             if result.get("ok"):
                 sent += 1
             else:
